@@ -43,6 +43,8 @@
   .etiqueta { display: inline-block; padding: 2px 9px; border-radius: 99px; background: #eef2fb; color: #3b4a6b; font-size: 12px; }
   .etiqueta.paga { background: #e3f6ea; color: var(--ok); }
   .etiqueta.aberta { background: #fdf2dc; color: var(--alerta); }
+  .etiqueta.rejeitada { background: #fde8e8; color: var(--perigo); }
+  .motivo { display: block; margin-top: 3px; font-size: 12px; color: var(--perigo); }
   .novo { animation: brilho 1.4s ease-out; }
   @keyframes brilho { from { background: #e4ecff; } to { background: transparent; } }
   .formulario { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
@@ -83,6 +85,8 @@
       <small>Financeiro</small>
       <a id="menu-contas" data-tela="contas">Contas a pagar</a>
       <a id="menu-relatorio" data-tela="relatorio">Relatórios</a>
+      <small>Fiscal</small>
+      <a id="menu-notas" data-tela="notas">Notas fiscais</a>
     </nav>
     <div class="quem" id="quem"></div>
   </aside>
@@ -183,6 +187,21 @@
       </form>
     </section>
 
+    <section id="tela-notas" hidden>
+      <header><div><div class="trilha">Fiscal › Notas fiscais</div><h1>Notas fiscais</h1></div></header>
+      <div class="resumo">
+        <div><small>Autorizadas</small><b id="notas-autorizadas">0</b></div>
+        <div><small>Rejeitadas</small><b id="notas-rejeitadas">0</b></div>
+        <div><small>A emitir</small><b id="notas-pendentes">0</b></div>
+      </div>
+      <div class="cartao" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr><th>Fornecedor</th><th>CNPJ</th><th>Situação</th><th class="num">Valor</th><th></th></tr></thead>
+          <tbody id="lista-notas"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="tela-relatorio" hidden>
       <header>
         <div><div class="trilha">Financeiro › Relatórios</div><h1>Contas em aberto</h1></div>
@@ -217,7 +236,7 @@
   }
 
   function mostrar(tela) {
-    for (const nome of ["inicio", "fornecedores", "form", "contas", "conta", "relatorio"]) $("tela-" + nome).hidden = nome !== tela;
+    for (const nome of ["inicio", "fornecedores", "form", "contas", "conta", "notas", "relatorio"]) $("tela-" + nome).hidden = nome !== tela;
     const menu = { form: "fornecedores", conta: "contas" }[tela] ?? tela;
     document.querySelectorAll("nav a").forEach((link) => link.classList.toggle("ativo", link.dataset.tela === menu));
     if (tela === "form") { $("form").reset(); $("razao").focus(); }
@@ -279,7 +298,53 @@
     $("inicio-fornecedores").textContent = dados.fornecedores.length;
     $("inicio-abertas").textContent = abertas.length;
     $("inicio-total").textContent = brl(abertas.reduce((soma, conta) => soma + conta.valor, 0));
+    desenharNotas(dados);
     $("previa").textContent = csv();
+  }
+
+  function cnpjValido(texto) {
+    const d = texto.replace(/\D/g, "");
+    if (d.length !== 14 || /^(\d)\1+$/.test(d)) return false;
+    const digito = (n) => {
+      let soma = 0, peso = n - 7;
+      for (let i = 0; i < n; i++) { soma += Number(d[i]) * peso--; if (peso < 2) peso = 9; }
+      const resto = soma % 11;
+      return resto < 2 ? 0 : 11 - resto;
+    };
+    return digito(12) === Number(d[12]) && digito(13) === Number(d[13]);
+  }
+
+  function desenharNotas(dados) {
+    const corpo = $("lista-notas");
+    const pagas = dados.contas.map((conta, indice) => ({ conta, indice })).filter(({ conta }) => conta.paga);
+    corpo.innerHTML = pagas.length ? "" : '<tr><td colspan="5" class="vazio">Nenhuma conta paga para emitir nota.</td></tr>';
+    for (const { conta, indice } of pagas) {
+      const cnpj = dados.fornecedores.find((item) => item.razao === conta.fornecedor)?.cnpj ?? "";
+      const botao = document.createElement("button");
+      botao.className = "primario mini emitir";
+      botao.textContent = "Emitir NF";
+      botao.hidden = Boolean(conta.nf?.numero);
+      botao.addEventListener("click", () => {
+        const atual = ler();
+        const proximo = atual.contas.filter((item) => item.nf?.numero).length + 1;
+        atual.contas[indice].nf = cnpjValido(cnpj)
+          ? { numero: String(1000 + proximo) }
+          : { motivo: "Rejeição 207: CNPJ do fornecedor inválido na Receita" };
+        gravar(atual);
+        destaque = "n" + indice;
+        desenhar();
+        aviso(atual.contas[indice].nf.numero ? "Nota fiscal autorizada" : "Nota fiscal rejeitada");
+      });
+      const situacao = conta.nf?.numero
+        ? `<span class="etiqueta paga">Autorizada nº ${conta.nf.numero}</span>`
+        : conta.nf?.motivo
+          ? `<span class="etiqueta rejeitada">Rejeitada</span><span class="motivo">${conta.nf.motivo}</span>`
+          : '<span class="etiqueta aberta">A emitir</span>';
+      corpo.appendChild(linha([[conta.fornecedor], [cnpj], [situacao], [brl(conta.valor), "num"], [botao, "num"]], destaque === "n" + indice ? "novo" : ""));
+    }
+    $("notas-autorizadas").textContent = pagas.filter(({ conta }) => conta.nf?.numero).length;
+    $("notas-rejeitadas").textContent = pagas.filter(({ conta }) => conta.nf?.motivo).length;
+    $("notas-pendentes").textContent = pagas.filter(({ conta }) => !conta.nf).length;
   }
 
   function csv() {
